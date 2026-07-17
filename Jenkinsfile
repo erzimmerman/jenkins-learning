@@ -1,6 +1,14 @@
 pipeline {
     agent any
 
+    parameters {
+        string(
+            name: 'NAME',
+            defaultValue: 'Erik',
+            description: 'Namnet som Python-scriptet ska hälsa på'
+        )
+    }
+
     stages {
         stage('Inspect workspace') {
             steps {
@@ -13,7 +21,7 @@ pipeline {
 
         stage('Run Python') {
             steps {
-                sh 'python3 hello.py'
+                sh "python3 hello.py '${params.NAME}'"
             }
         }
     }
@@ -28,4 +36,3 @@ pipeline {
         }
     }
 }
-
