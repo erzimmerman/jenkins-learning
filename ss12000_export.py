@@ -41,6 +41,37 @@ def get_secret() -> str:
     return secret
 
 
+def extract_token(response_data: Any) -> str:
+    if isinstance(response_data, str):
+        token = response_data.strip()
+
+        if token:
+            return token
+
+    if not isinstance(response_data, dict):
+        raise RuntimeError(
+            "Unexpected response format from token endpoint."
+        )
+
+    possible_fields = [
+        "access_token",
+        "accessToken",
+        "token",
+        "apiToken",
+    ]
+
+    for field in possible_fields:
+        value = response_data.get(field)
+
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    raise RuntimeError(
+        "Could not find a token in the token endpoint response. "
+        f"Available fields: {list(response_data.keys())}"
+    )
+
+
 def request_token(
     base_url: str,
     secret: str,
@@ -69,46 +100,27 @@ def request_token(
 
     response.raise_for_status()
 
+    response_text = response.text.strip()
+
+    if not response_text:
+        raise RuntimeError(
+            "The token endpoint returned an empty response."
+        )
+
     try:
         response_data: Any = response.json()
-    except requests.JSONDecodeError as exc:
-        raise RuntimeError(
-            "The token endpoint did not return valid JSON."
-        ) from exc
+        token = extract_token(response_data)
+    except requests.JSONDecodeError:
+        token = response_text
 
-    token = extract_token(response_data)
+    if not token:
+        raise RuntimeError(
+            "The token endpoint returned an empty token."
+        )
 
     print("Token received successfully.")
 
     return token
-
-
-def extract_token(response_data: Any) -> str:
-    if isinstance(response_data, str):
-        return response_data
-
-    if not isinstance(response_data, dict):
-        raise RuntimeError(
-            "Unexpected response format from token endpoint."
-        )
-
-    possible_fields = [
-        "access_token",
-        "accessToken",
-        "token",
-        "apiToken",
-    ]
-
-    for field in possible_fields:
-        value = response_data.get(field)
-
-        if isinstance(value, str) and value:
-            return value
-
-    raise RuntimeError(
-        "Could not find a token in the token endpoint response. "
-        f"Available fields: {list(response_data.keys())}"
-    )
 
 
 def request_persons(
@@ -142,7 +154,9 @@ def request_persons(
 
 def save_response(response_data: Any) -> Path:
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    output_path = Path(f"response_persons_{timestamp}.json")
+    output_path = Path(
+        f"response_persons_{timestamp}.json"
+    )
 
     output_path.write_text(
         json.dumps(
@@ -188,6 +202,7 @@ def main() -> int:
             f"HTTP request failed with status {status_code}.",
             file=sys.stderr,
         )
+
         print(
             f"Response: {response_text}",
             file=sys.stderr,
