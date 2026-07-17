@@ -52,11 +52,32 @@ pipeline {
             }
         }
 
+        stage('Create users CSV') {
+            steps {
+                sh '''
+                    JSON_FILE=$(ls -t response_persons_*.json | head -n 1)
+
+                    echo "Using Persons file: $JSON_FILE"
+
+                    .venv/bin/python create_users_filtered.py \
+                        --input "$JSON_FILE" \
+                        --output users_filtered.csv
+                '''
+            }
+        }
+
         stage('Inspect output') {
             steps {
                 sh '''
                     echo "Generated files:"
                     ls -lh response_persons_*.json
+                    ls -lh users_filtered.csv
+
+                    echo "Number of CSV lines:"
+                    wc -l users_filtered.csv
+
+                    echo "CSV header:"
+                    head -n 1 users_filtered.csv
                 '''
             }
         }
@@ -65,14 +86,14 @@ pipeline {
     post {
         always {
             archiveArtifacts(
-                artifacts: 'response_persons_*.json',
+                artifacts: 'response_persons_*.json, users_filtered.csv',
                 allowEmptyArchive: true,
                 fingerprint: true
             )
         }
 
         success {
-            echo 'SS12000 export completed successfully.'
+            echo 'SS12000 export and CSV conversion completed successfully.'
         }
 
         failure {
@@ -83,6 +104,7 @@ pipeline {
             sh '''
                 rm -rf .venv
                 rm -f response_persons_*.json
+                rm -f users_filtered.csv
             '''
         }
     }

@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 response_persons_*.json
+users_filtered.csv
