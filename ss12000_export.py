@@ -75,6 +75,7 @@ def request_collection(
     base_url: str,
     resource: str,
     token: str,
+    query_params: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     url = f"{base_url.rstrip('/')}/{resource}"
     records: list[dict[str, Any]] = []
@@ -89,6 +90,9 @@ def request_collection(
         response = session.get(
             url,
             headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+            # Only add the original query on page one. A pagination URL returned
+            # by the API is already complete and must not receive duplicates.
+            params=query_params if page == 1 else None,
             timeout=120,
         )
         response.raise_for_status()
@@ -121,7 +125,18 @@ def main() -> int:
         with requests.Session() as session:
             token = request_token(session, args.base_url, secret, args.org_id)
             persons = request_collection(session, args.base_url, "persons", token)
-            activities = request_collection(session, args.base_url, "activities", token)
+            activities = request_collection(
+                session,
+                args.base_url,
+                "activities",
+                token,
+                query_params=[
+                    ("expandReferenceNames", "true"),
+                    ("expandplacement", "true"),
+                    ("expand", "groups"),
+                    ("expand", "teachers"),
+                ],
+            )
         output_dir = Path(args.output_dir)
         save(output_dir / "persons.json", "persons", persons)
         save(output_dir / "activities.json", "activities", activities)
@@ -138,4 +153,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
