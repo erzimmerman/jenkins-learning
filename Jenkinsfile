@@ -24,7 +24,7 @@ pipeline {
         )
         string(
             name: 'SFTP_REMOTE_DIR',
-            defaultValue: 'larande_test',
+            defaultValue: 'Lärande',
             description: 'Remote directory for the CSV files'
         )
         string(
@@ -42,16 +42,27 @@ pipeline {
 
     stages {
         stage('Inspect environment') {
-            steps {
-                sh '''
-                    set -eu
-                    whoami
-                    pwd
-                    python3 --version
-                    git log -1 --oneline
-                '''
-            }
-        }
+    steps {
+        deleteDir()
+        checkout scm
+
+        sh '''
+            set -eu
+            whoami
+            pwd
+            python3 --version
+            git log -1 --oneline
+
+            echo "Known hosts fingerprint:"
+            ssh-keygen -lf known_hosts
+
+            echo "Checking SchoolSoft host entry:"
+            ssh-keygen \
+                -F "[$SFTP_HOST]:$SFTP_PORT" \
+                -f known_hosts
+        '''
+    }
+}
 
         stage('Create python environment') {
             steps {
