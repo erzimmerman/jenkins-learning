@@ -57,6 +57,26 @@ def embedded_groups(activity: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def activity_teachers(activity: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return expanded duties, where the actual teacher is available as person.id."""
+    embedded = activity.get("_embedded")
+    if isinstance(embedded, dict):
+        teachers = embedded.get("teachers")
+        if isinstance(teachers, list):
+            return [teacher for teacher in teachers if isinstance(teacher, dict)]
+
+    # Fallback for implementations that put expanded teachers directly on the
+    # activity. Duty-only references without person.id are not usable here.
+    teachers = activity.get("teachers")
+    if isinstance(teachers, list):
+        return [
+            teacher
+            for teacher in teachers
+            if isinstance(teacher, dict) and ref_id(teacher.get("person"))
+        ]
+    return []
+
+
 def enrollment_status(end_date: Any) -> str:
     value = text(end_date)
     if not value:
@@ -107,7 +127,7 @@ def rows(
         group_ids = [ref_id(group.get("id")) for group in groups]
         group_ids = [group_id for group_id in group_ids if group_id]
 
-        teachers = [teacher for teacher in as_list(activity.get("teachers")) if isinstance(teacher, dict)]
+        teachers = activity_teachers(activity)
         if teachers and not group_ids:
             raise ValueError(
                 f"Activity {base['course_id']!r} has teachers but no expanded group id "
