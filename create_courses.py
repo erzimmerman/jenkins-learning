@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from ss12000_common import canvas_status, course_id_for, course_name_for, extract_collection, iso_date, load_json, nested, ref_id, unique_rows, write_csv
+from ss12000_common import activity_name, canvas_status, extract_collection, iso_date, load_json, nested, ref_id, unique_rows, write_csv
 
 
 COLUMNS = ["course_id", "short_name", "long_name", "account_id", "term_id", "status", "start_date", "end_date"]
@@ -20,10 +20,8 @@ def arguments() -> argparse.Namespace:
 def rows(activities: list[dict]) -> list[dict[str, str]]:
     generated = []
     for activity in activities:
-        course_id = course_id_for(activity)
-        name = course_name_for(activity) or course_id
-        parent = nested(activity, "parentActivity", "course", "syllabus", "subject", "parent")
-        parent = parent if isinstance(parent, dict) else {}
+        course_id = ref_id(activity.get("id"))
+        name = activity_name(activity) or course_id
         generated.append({
             "course_id": course_id,
             "short_name": name,
@@ -31,8 +29,8 @@ def rows(activities: list[dict]) -> list[dict[str, str]]:
             "account_id": ref_id(nested(activity, "organisation", "organization")),
             "term_id": ref_id(nested(activity, "term", "schoolYear", "academicSession")),
             "status": canvas_status(activity.get("status") or activity.get("activityStatus")),
-            "start_date": iso_date(parent.get("startDate") or activity.get("startDate")),
-            "end_date": iso_date(parent.get("endDate") or activity.get("endDate")),
+            "start_date": iso_date(activity.get("startDate")),
+            "end_date": iso_date(activity.get("endDate")),
         })
     return list(unique_rows(generated, ("course_id",)))
 

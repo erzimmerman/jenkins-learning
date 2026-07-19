@@ -1,112 +1,179 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
+from datetime import date
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-from ss12000_common import as_list, canvas_status, course_id_for, duty_to_person_index, extract_collection, load_json, nested, ref_id, text, unique_rows, write_csv
+from ss12000_common import as_list, extract_collection, first_value, load_json, ref_id, text
 
 
-COLUMNS = ["course_id", "user_id", "role", "section_id", "status", "associated_user_id"]
+COLUMNS = [
+    "course_id",
+    "start_date",
+    "end_date",
+    "user_id",
+    "role",
+    "section_id",
+    "status",
+]
 
 
 def arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Create enrollments.csv from SS12000 Activities and Persons."
+    )
     parser.add_argument("--persons", required=True)
     parser.add_argument("--activities", required=True)
     parser.add_argument("--output", default="output/enrollments.csv")
     return parser.parse_args()
 
 
-def role_name(value: Any, default: str) -> str:
-    raw = text(value).casefold()
-    if any(word in raw for word in ("teacher", "lärare", "educator", "staff")):
-        return "teacher"
-    if any(word in raw for word in ("student", "elev", "learner", "member")):
-        return "student"
-    if any(word in raw for word in ("observer", "guardian", "parent", "vårdnad")):
-        return "observer"
-    if raw in {"ta", "assistant", "assistent"}:
-        return "ta"
-    return default
-
-
-def direct_members(activity: dict[str, Any], duty_index: dict[str, str]) -> Iterator[tuple[str, str, str]]:
-    fields = {
-        "students": "student",
-        "studentAssignments": "student",
-        "members": "student",
-        "participants": "student",
-        "persons": "student",
-        "teachers": "teacher",
-        "teacherAssignments": "teacher",
-        "staff": "teacher",
-    }
-    for field, default_role in fields.items():
-        for member in as_list(activity.get(field)):
-            if not isinstance(member, dict):
-                member = {"person": member}
-            direct_person = member.get("person") or member.get("student") or member.get("teacher")
-            if direct_person is not None:
-                person_id = ref_id(direct_person)
-            elif default_role == "teacher" and member.get("duty") is not None:
-                person_id = duty_index.get(ref_id(member.get("duty")), "")
-            else:
-                person_id = ref_id(member)
-            if person_id:
-                yield person_id, role_name(member.get("role") or member.get("type"), default_role), canvas_status(member.get("status"))
-
-    # Some implementations embed group memberships below Activity.groups.
-    for group in as_list(activity.get("groups")):
-        if not isinstance(group, dict):
-            continue
-        for member in as_list(group.get("groupMemberships")) + as_list(group.get("members")):
-            if isinstance(member, dict):
-                person_id = ref_id(member.get("person") or member)
-                if person_id:
-                    yield person_id, role_name(member.get("role"), "student"), canvas_status(member.get("status"))
-
-
-def person_activity_memberships(persons: list[dict[str, Any]]) -> Iterator[tuple[str, str, str, str]]:
+def person_user_ids(persons: list[dict[str, Any]]) -> dict[str, str]:
+    """Map SS12000 Person.id to the first eduPersonPrincipalNames value."""
+    result: dict[str, str] = {}
     for person in persons:
         person_id = ref_id(person.get("id"))
-        if not person_id:
-            continue
-        for field in ("activities", "activityMemberships", "memberships", "activityAssignments"):
-            for membership in as_list(person.get(field)):
-                if not isinstance(membership, dict):
-                    continue
-                activity_id = ref_id(membership.get("activity") or membership)
-                if activity_id:
-                    yield activity_id, person_id, role_name(membership.get("role") or membership.get("type"), "student"), canvas_status(membership.get("status"))
+        user_id = first_value(person.get("eduPersonPrincipalNames"))
+        if person_id and user_id:
+            result[person_id] = user_id
+    return result
 
 
-def rows(persons: list[dict[str, Any]], activities: list[dict[str, Any]]) -> list[dict[str, str]]:
-    person_ids = {ref_id(person.get("id")) for person in persons}
-    activities_by_id = {ref_id(activity.get("id")): activity for activity in activities}
-    duty_index = duty_to_person_index(persons)
+def embedded_groups(activity: dict[str, Any]) -> list[dict[str, Any]]:
+    embedded = activity.get("_embedded")
+    if isinstance(embedded, dict):
+        groups = embedded.get("groups")
+        if isinstance(groups, list):
+            return [group for group in groups if isinstance(group, dict)]
+
+    # Kept as a fallback for SS12000 implementations returning expanded groups
+    # directly on the activity instead of below _embedded.
+    groups = activity.get("groups")
+    if isinstance(groups, list):
+        return [group for group in groups if isinstance(group, dict)]
+    return []
+
+
+def enrollment_status(end_date: Any) -> str:
+    value = text(end_date)
+    if not value:
+        return "active"
+    try:
+        parsed = date.fromisoformat(value[:10])
+    except ValueError as exc:
+        raise ValueError(f"Invalid Activity.endDate: {value!r}") from exc
+    return "completed" if parsed < date.today() else "active"
+
+
+def lookup_user_id(index: dict[str, str], person_id: str, context: str) -> str:
+    if not person_id:
+        raise ValueError(f"Missing person.id for {context}")
+    user_id = index.get(person_id)
+    if not user_id:
+        raise ValueError(
+            f"Person {person_id!r}, referenced by {context}, was not found in "
+            "Persons or has no eduPersonPrincipalNames value"
+        )
+    return user_id
+
+
+def base_row(activity: dict[str, Any]) -> dict[str, str]:
+    course_id = ref_id(activity.get("id"))
+    if not course_id:
+        raise ValueError("An activity is missing id")
+    start_date = text(activity.get("startDate"))
+    end_date = text(activity.get("endDate"))
+    return {
+        "course_id": course_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "status": enrollment_status(end_date),
+    }
+
+
+def rows(
+    persons: list[dict[str, Any]],
+    activities: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    user_ids = person_user_ids(persons)
     generated: list[dict[str, str]] = []
 
-    for activity_id, activity in activities_by_id.items():
-        for person_id, role, status in direct_members(activity, duty_index):
-            if person_id in person_ids:
-                generated.append({
-                    "course_id": course_id_for(activity), "user_id": person_id,
-                    "role": role, "section_id": activity_id, "status": status,
-                    "associated_user_id": "",
-                })
+    for activity in activities:
+        base = base_row(activity)
+        groups = embedded_groups(activity)
+        group_ids = [ref_id(group.get("id")) for group in groups]
+        group_ids = [group_id for group_id in group_ids if group_id]
 
-    for activity_id, person_id, role, status in person_activity_memberships(persons):
-        activity = activities_by_id.get(activity_id)
-        if activity:
+        teachers = [teacher for teacher in as_list(activity.get("teachers")) if isinstance(teacher, dict)]
+        if teachers and not group_ids:
+            raise ValueError(
+                f"Activity {base['course_id']!r} has teachers but no expanded group id "
+                "to use as section_id"
+            )
+        if len(group_ids) > 1 and teachers:
+            print(
+                f"Activity {base['course_id']} has multiple groups; teacher enrollments "
+                f"use the first group, {group_ids[0]}.",
+                file=sys.stderr,
+            )
+
+        # Exactly one row for every teacher on the activity.
+        for teacher in teachers:
+            person_id = ref_id(teacher.get("person"))
             generated.append({
-                "course_id": course_id_for(activity), "user_id": person_id,
-                "role": role, "section_id": activity_id, "status": status,
-                "associated_user_id": "",
+                **base,
+                "user_id": lookup_user_id(
+                    user_ids, person_id, f"Activity {base['course_id']} teachers"
+                ),
+                "role": "teacher",
+                "section_id": group_ids[0],
             })
 
-    return list(unique_rows(generated, ("section_id", "user_id", "role")))
+        # Exactly one row for every student group membership. The group that
+        # contains the membership supplies section_id.
+        for group in groups:
+            section_id = ref_id(group.get("id"))
+            if not section_id:
+                raise ValueError(
+                    f"An expanded group in Activity {base['course_id']!r} is missing id"
+                )
+            memberships = group.get("groupMemberships")
+            if memberships is None:
+                memberships = group.get("groupmemberships")
+            for membership in as_list(memberships):
+                if not isinstance(membership, dict):
+                    continue
+                person_id = ref_id(membership.get("person"))
+                generated.append({
+                    **base,
+                    "user_id": lookup_user_id(
+                        user_ids,
+                        person_id,
+                        f"Activity {base['course_id']} group {section_id} groupMemberships",
+                    ),
+                    "role": "student",
+                    "section_id": section_id,
+                })
+
+    return generated
+
+
+def write_enrollments(path: Path, enrollment_rows: list[dict[str, str]]) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=COLUMNS,
+            extrasaction="ignore",
+            delimiter=",",
+            quoting=csv.QUOTE_ALL,
+        )
+        writer.writeheader()
+        writer.writerows(enrollment_rows)
+    return len(enrollment_rows)
 
 
 def main() -> int:
@@ -114,7 +181,13 @@ def main() -> int:
     try:
         persons = extract_collection(load_json(Path(args.persons)), ("persons",))
         activities = extract_collection(load_json(Path(args.activities)), ("activities",))
-        count = write_csv(Path(args.output), COLUMNS, rows(persons, activities))
+        enrollment_rows = rows(persons, activities)
+        if activities and not enrollment_rows:
+            raise ValueError(
+                "Activities contains records, but no teachers or "
+                "_embedded.groups.groupMemberships could be converted"
+            )
+        count = write_enrollments(Path(args.output), enrollment_rows)
         print(f"Created {args.output} with {count} rows.")
         return 0
     except Exception as exc:

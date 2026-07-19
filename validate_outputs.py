@@ -10,7 +10,7 @@ REQUIRED_COLUMNS = {
     "users_filtered.csv": ("user_id", "login_id", "first_name", "last_name", "full_name", "short_name", "email", "status", "authentication_provider_id"),
     "user_observers.csv": ("observer_id", "student_id", "status"),
     "sections.csv": ("section_id", "course_id", "name", "status", "integration_id", "start_date", "end_date"),
-    "enrollments.csv": ("course_id", "user_id", "role", "section_id", "status", "associated_user_id"),
+    "enrollments.csv": ("course_id", "start_date", "end_date", "user_id", "role", "section_id", "status"),
     "courses.csv": ("course_id", "short_name", "long_name", "account_id", "term_id", "status", "start_date", "end_date"),
 }
 
@@ -37,7 +37,15 @@ def main() -> int:
         if filename in {"users_filtered.csv", "sections.csv", "courses.csv"} and not rows:
             errors.append(f"{path} contains no data rows")
 
-    user_ids = {row["user_id"] for row in data.get("users_filtered.csv", [])}
+    # enrollments.csv deliberately uses EPPN as user_id according to the
+    # integration mapping. In users_filtered.csv that value is login_id, while
+    # Person.id is stored in user_id, so accept both identifiers here.
+    user_ids = {
+        value
+        for row in data.get("users_filtered.csv", [])
+        for value in (row.get("user_id", ""), row.get("login_id", ""))
+        if value
+    }
     course_ids = {row["course_id"] for row in data.get("courses.csv", [])}
     section_ids = {row["section_id"] for row in data.get("sections.csv", [])}
     for row in data.get("user_observers.csv", []):
