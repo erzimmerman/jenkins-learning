@@ -24,7 +24,7 @@ pipeline {
         )
         string(
             name: 'SFTP_REMOTE_DIR',
-            defaultValue: 'Lärande',
+            defaultValue: 'larande_test',
             description: 'Remote directory for the CSV files'
         )
         string(
