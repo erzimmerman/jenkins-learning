@@ -7,7 +7,6 @@ pipeline {
             defaultValue: 'https://sms.schoolsoft.se/larande/ss12000/v2',
             description: 'Base URL for the SS12000 API'
         )
-
         string(
             name: 'ORG_ID',
             defaultValue: '0',
@@ -15,22 +14,34 @@ pipeline {
         )
     }
 
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
     stages {
         stage('Inspect environment') {
             steps {
-                sh 'whoami'
-                sh 'pwd'
-                sh 'python3 --version'
-                sh 'git log -1 --oneline'
+                sh '''
+                    set -eu
+                    whoami
+                    pwd
+                    python3 --version
+                    git log -1 --oneline
+                '''
             }
         }
 
-        stage('Create Python environment') {
+        stage('Create python environment') {
             steps {
                 sh '''
+                    set -eu
+                    rm -rf .venv output
                     python3 -m venv .venv
                     .venv/bin/python -m pip install --upgrade pip
                     .venv/bin/pip install -r requirements.txt
+                    mkdir -p output
                 '''
             }
         }
@@ -44,9 +55,11 @@ pipeline {
                     )
                 ]) {
                     sh '''
+                        set -eu
                         .venv/bin/python ss12000_export.py \
                             --base-url "$BASE_URL" \
-                            --org-id "$ORG_ID"
+                            --org-id "$ORG_ID" \
+                            --output-dir output
                     '''
                 }
             }
@@ -55,13 +68,55 @@ pipeline {
         stage('Create users CSV') {
             steps {
                 sh '''
-                    JSON_FILE=$(ls -t response_persons_*.json | head -n 1)
-
-                    echo "Using Persons file: $JSON_FILE"
-
+                    set -eu
                     .venv/bin/python create_users_filtered.py \
-                        --input "$JSON_FILE" \
-                        --output users_filtered.csv
+                        --persons output/persons.json \
+                        --output output/users_filtered.csv
+                '''
+            }
+        }
+
+        stage('Create user_observers CSV') {
+            steps {
+                sh '''
+                    set -eu
+                    .venv/bin/python create_user_observers.py \
+                        --persons output/persons.json \
+                        --output output/user_observers.csv
+                '''
+            }
+        }
+
+        stage('Create sections CSV') {
+            steps {
+                sh '''
+                    set -eu
+                    .venv/bin/python create_sections.py \
+                        --activities output/activities.json \
+                        --output output/sections.csv
+                '''
+            }
+        }
+
+        stage('Create enrollments CSV') {
+            steps {
+                sh '''
+                    set -eu
+                    .venv/bin/python create_enrollments.py \
+                        --persons output/persons.json \
+                        --activities output/activities.json \
+                        --output output/enrollments.csv
+                '''
+            }
+        }
+
+        stage('Create courses CSV') {
+            steps {
+                sh '''
+                    set -eu
+                    .venv/bin/python create_courses.py \
+                        --activities output/activities.json \
+                        --output output/courses.csv
                 '''
             }
         }
@@ -69,15 +124,20 @@ pipeline {
         stage('Inspect output') {
             steps {
                 sh '''
+                    set -eu
                     echo "Generated files:"
-                    ls -lh response_persons_*.json
-                    ls -lh users_filtered.csv
+                    ls -lh output/*.json output/*.csv
 
-                    echo "Number of CSV lines:"
-                    wc -l users_filtered.csv
+                    echo "CSV row counts (including header):"
+                    wc -l output/*.csv
 
-                    echo "CSV header:"
-                    head -n 1 users_filtered.csv
+                    echo "CSV headers:"
+                    for file in output/*.csv; do
+                        echo "--- $file"
+                        head -n 1 "$file"
+                    done
+
+                    .venv/bin/python validate_outputs.py --output-dir output
                 '''
             }
         }
@@ -86,26 +146,23 @@ pipeline {
     post {
         always {
             archiveArtifacts(
-                artifacts: 'response_persons_*.json, users_filtered.csv',
+                artifacts: 'output/*.json, output/*.csv',
                 allowEmptyArchive: true,
                 fingerprint: true
             )
         }
-
         success {
-            echo 'SS12000 export and CSV conversion completed successfully.'
+            echo 'SS12000 export and all CSV transformations completed successfully.'
         }
-
         failure {
-            echo 'SS12000 export failed. Check Console Output.'
+            echo 'Pipeline failed. Check Console Output and the archived source JSON files.'
         }
-
         cleanup {
             sh '''
                 rm -rf .venv
-                rm -f response_persons_*.json
-                rm -f users_filtered.csv
+                rm -rf output
             '''
         }
     }
 }
+
