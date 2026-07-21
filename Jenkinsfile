@@ -190,10 +190,10 @@ pipeline {
                             test -s "output/$file"
                         done
 
-                        KNOWN_HOSTS_FILE="$WORKSPACE/known_hosts"
+                        KNOWN_HOSTS_SOURCE="$WORKSPACE/known_hosts"
                         EXPECTED_HOST="[$SFTP_HOST]:$SFTP_PORT"
 
-                        test -s "$KNOWN_HOSTS_FILE"
+                        test -s "$KNOWN_HOSTS_SOURCE"
 
                         case "$SFTP_PORT" in
                             *[!0-9]*|'')
@@ -202,22 +202,29 @@ pipeline {
                                 ;;
                         esac
 
-                        echo "Verifying host entry $EXPECTED_HOST in $KNOWN_HOSTS_FILE"
+                        SFTP_KNOWN_HOSTS_FILE="$(mktemp)"
+                        SFTP_BATCH_FILE="$(mktemp)"
+                        trap 'rm -f "$SFTP_KNOWN_HOSTS_FILE" "$SFTP_BATCH_FILE"' EXIT
+
+                        # OpenSSH treats spaces in UserKnownHostsFile as file
+                        # separators. Jenkins workspaces can contain spaces, so
+                        # use a temporary path without spaces for the SFTP call.
+                        cp "$KNOWN_HOSTS_SOURCE" "$SFTP_KNOWN_HOSTS_FILE"
+                        chmod 600 "$SFTP_KNOWN_HOSTS_FILE"
+
+                        echo "Verifying host entry $EXPECTED_HOST in temporary known_hosts"
 
                         if ! ssh-keygen \
                             -F "$EXPECTED_HOST" \
-                            -f "$KNOWN_HOSTS_FILE" \
+                            -f "$SFTP_KNOWN_HOSTS_FILE" \
                             > /dev/null; then
                             echo "No matching host/port entry exists in known_hosts." >&2
                             echo "Available fingerprints:" >&2
-                            ssh-keygen -lf "$KNOWN_HOSTS_FILE" >&2
+                            ssh-keygen -lf "$SFTP_KNOWN_HOSTS_FILE" >&2
                             exit 1
                         fi
 
-                        ssh-keygen -lf "$KNOWN_HOSTS_FILE"
-
-                        SFTP_BATCH_FILE="$(mktemp)"
-                        trap 'rm -f "$SFTP_BATCH_FILE"' EXIT
+                        ssh-keygen -lf "$SFTP_KNOWN_HOSTS_FILE"
 
                         printf 'cd "%s"\n' "$SFTP_REMOTE_DIR" > "$SFTP_BATCH_FILE"
 
@@ -239,7 +246,7 @@ pipeline {
                             -o "CheckHostIP=no" \
                             -o "HostKeyAlgorithms=ssh-ed25519" \
                             -o "GlobalKnownHostsFile=/dev/null" \
-                            -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" \
+                            -o "UserKnownHostsFile=$SFTP_KNOWN_HOSTS_FILE" \
                             "$SFTP_USER@$SFTP_HOST"
 
                         echo "SchoolSoft SFTP upload completed successfully."
