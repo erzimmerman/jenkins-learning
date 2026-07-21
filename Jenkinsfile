@@ -179,13 +179,21 @@ pipeline {
                     sh '''
                         set -eu
 
+                        SFTP_HOST="${SFTP_HOST:-sms-int1.schoolsoft.se}"
+                        SFTP_USER="${SFTP_USER:-root}"
+                        SFTP_REMOTE_DIR="${SFTP_REMOTE_DIR:-Lärande}"
+                        SFTP_PORT="${SFTP_PORT:-2222}"
+
                         CSV_FILES="users_filtered.csv user_observers.csv sections.csv enrollments.csv courses.csv"
 
                         for file in $CSV_FILES; do
                             test -s "output/$file"
                         done
 
-                        test -s known_hosts
+                        KNOWN_HOSTS_FILE="$WORKSPACE/known_hosts"
+                        EXPECTED_HOST="[$SFTP_HOST]:$SFTP_PORT"
+
+                        test -s "$KNOWN_HOSTS_FILE"
 
                         case "$SFTP_PORT" in
                             *[!0-9]*|'')
@@ -193,6 +201,20 @@ pipeline {
                                 exit 1
                                 ;;
                         esac
+
+                        echo "Verifying host entry $EXPECTED_HOST in $KNOWN_HOSTS_FILE"
+
+                        if ! ssh-keygen \
+                            -F "$EXPECTED_HOST" \
+                            -f "$KNOWN_HOSTS_FILE" \
+                            > /dev/null; then
+                            echo "No matching host/port entry exists in known_hosts." >&2
+                            echo "Available fingerprints:" >&2
+                            ssh-keygen -lf "$KNOWN_HOSTS_FILE" >&2
+                            exit 1
+                        fi
+
+                        ssh-keygen -lf "$KNOWN_HOSTS_FILE"
 
                         SFTP_BATCH_FILE="$(mktemp)"
                         trap 'rm -f "$SFTP_BATCH_FILE"' EXIT
@@ -208,11 +230,16 @@ pipeline {
                         echo "Uploading five CSV files to $SFTP_HOST:$SFTP_REMOTE_DIR"
 
                         sftp \
+                            -F /dev/null \
+                            -vv \
                             -b "$SFTP_BATCH_FILE" \
                             -P "$SFTP_PORT" \
-                            -o BatchMode=yes \
-                            -o StrictHostKeyChecking=yes \
-                            -o UserKnownHostsFile="$WORKSPACE/known_hosts" \
+                            -o "BatchMode=yes" \
+                            -o "StrictHostKeyChecking=yes" \
+                            -o "CheckHostIP=no" \
+                            -o "HostKeyAlgorithms=ssh-ed25519" \
+                            -o "GlobalKnownHostsFile=/dev/null" \
+                            -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" \
                             "$SFTP_USER@$SFTP_HOST"
 
                         echo "SchoolSoft SFTP upload completed successfully."
