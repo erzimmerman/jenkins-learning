@@ -24,7 +24,7 @@ pipeline {
         )
         string(
             name: 'SFTP_REMOTE_DIR',
-            defaultValue: 'Lärande',
+            defaultValue: 'larande_test',
             description: 'Remote directory for the CSV files'
         )
         string(
@@ -181,7 +181,7 @@ pipeline {
 
                         SFTP_HOST="${SFTP_HOST:-sms-int1.schoolsoft.se}"
                         SFTP_USER="${SFTP_USER:-root}"
-                        SFTP_REMOTE_DIR="${SFTP_REMOTE_DIR:-Lärande}"
+                        SFTP_REMOTE_DIR="${SFTP_REMOTE_DIR:-larande_test}"
                         SFTP_PORT="${SFTP_PORT:-2222}"
 
                         CSV_FILES="users_filtered.csv user_observers.csv sections.csv enrollments.csv courses.csv"
