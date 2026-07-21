@@ -227,6 +227,16 @@ pipeline {
                         ssh-keygen -lf "$SFTP_KNOWN_HOSTS_FILE"
 
                         printf 'cd "%s"\n' "$SFTP_REMOTE_DIR" > "$SFTP_BATCH_FILE"
+                        printf -- '-mkdir "gamla"\n' >> "$SFTP_BATCH_FILE"
+
+                        # Archive the files from the previous delivery. The
+                        # leading minus lets the first delivery continue when
+                        # a source file or archive file does not exist yet.
+                        for file in $CSV_FILES; do
+                            printf -- '-rm "gamla/%s"\n' "$file" >> "$SFTP_BATCH_FILE"
+                            printf -- '-rename "%s" "gamla/%s"\n' \
+                                "$file" "$file" >> "$SFTP_BATCH_FILE"
+                        done
 
                         for file in $CSV_FILES; do
                             printf 'put "output/%s" "%s"\n' "$file" "$file" >> "$SFTP_BATCH_FILE"
@@ -234,7 +244,8 @@ pipeline {
 
                         printf 'bye\n' >> "$SFTP_BATCH_FILE"
 
-                        echo "Uploading five CSV files to $SFTP_HOST:$SFTP_REMOTE_DIR"
+                        echo "Archiving the previous CSV files in $SFTP_REMOTE_DIR/gamla"
+                        echo "Uploading five new CSV files to $SFTP_HOST:$SFTP_REMOTE_DIR"
 
                         sftp \
                             -F /dev/null \
