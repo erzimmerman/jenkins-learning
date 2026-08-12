@@ -13,6 +13,18 @@ import requests
 from ss12000_common import extract_collection
 
 
+PERSONS_QUERY_PARAMS = [
+    ("expand", "duties"),
+]
+
+ACTIVITIES_QUERY_PARAMS = [
+    ("expandReferenceNames", "true"),
+    ("expandplacement", "true"),
+    ("expand", "groups"),
+    ("expand", "teachers"),
+]
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export Persons and Activities from SS12000")
     parser.add_argument("--base-url", required=True)
@@ -124,18 +136,22 @@ def main() -> int:
     try:
         with requests.Session() as session:
             token = request_token(session, args.base_url, secret, args.org_id)
-            persons = request_collection(session, args.base_url, "persons", token)
+            # enrollments.csv classifies every group member by checking
+            # Persons._embedded.duties. The expansion is therefore required,
+            # not optional, and request_collection sends it on every page.
+            persons = request_collection(
+                session,
+                args.base_url,
+                "persons",
+                token,
+                query_params=PERSONS_QUERY_PARAMS,
+            )
             activities = request_collection(
                 session,
                 args.base_url,
                 "activities",
                 token,
-                query_params=[
-                    ("expandReferenceNames", "true"),
-                    ("expandplacement", "true"),
-                    ("expand", "groups"),
-                    ("expand", "teachers"),
-                ],
+                query_params=ACTIVITIES_QUERY_PARAMS,
             )
         output_dir = Path(args.output_dir)
         save(output_dir / "persons.json", "persons", persons)

@@ -52,18 +52,42 @@ def person_user_ids(persons: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def person_index(persons: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {
-        person_id: person
-        for person in persons
-        if (person_id := ref_id(person.get("id")))
-    }
+    result: dict[str, dict[str, Any]] = {}
+    for person in persons:
+        person_id = ref_id(person.get("id"))
+        if not person_id:
+            continue
+        existing = result.get(person_id)
+        # If pagination happens to return a duplicate Person, retain the
+        # version containing duties so a teacher cannot be downgraded.
+        if existing is None or (
+            has_duties(person) and not has_duties(existing)
+        ):
+            result[person_id] = person
+    return result
+
+
+def contains_information(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(contains_information(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_information(item) for item in value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return bool(value)
+
+
+def has_duties(person: dict[str, Any]) -> bool:
+    duties = nested(person, "_embedded.duties", "duties")
+    return contains_information(duties)
 
 
 def membership_role(person: dict[str, Any]) -> str:
     # The current SS12000 response stores duties below _embedded. Keep direct
     # duties as a compatibility fallback for other implementations.
-    duties = nested(person, "_embedded.duties", "duties")
-    return "teacher" if as_list(duties) else "student"
+    return "teacher" if has_duties(person) else "student"
 
 
 def embedded_groups(activity: dict[str, Any]) -> list[dict[str, Any]]:
@@ -195,6 +219,11 @@ def rows(
     user_ids = person_user_ids(persons)
     persons_by_id = person_index(persons)
     duty_persons = duty_to_person_index(persons)
+    persons_with_duties = sum(has_duties(person) for person in persons_by_id.values())
+    print(
+        f"Persons lookup contains {len(persons_by_id)} persons; "
+        f"{persons_with_duties} have _embedded.duties information."
+    )
     generated: list[dict[str, str]] = []
 
     for activity in activities:
