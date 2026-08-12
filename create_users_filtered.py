@@ -95,10 +95,11 @@ def has_duties(person: dict[str, Any]) -> bool:
     return bool(as_list(nested(person, "_embedded.duties", "duties")))
 
 
-def rows(persons: list[dict[str, Any]]) -> list[dict[str, str]]:
-    generated: list[dict[str, str]] = []
+def included_person_ids(persons: list[dict[str, Any]]) -> set[str]:
+    """Return Person.id values that will actually exist in users_filtered.csv."""
     preschool_guardians, other_guardians = guardian_ids_by_child_school_type(persons)
     preschool_only_guardians = preschool_guardians - other_guardians
+    included: set[str] = set()
 
     for person in persons:
         if excluded_student(person):
@@ -106,6 +107,21 @@ def rows(persons: list[dict[str, Any]]) -> list[dict[str, str]]:
 
         person_id = ref_id(person.get("id"))
         if person_id in preschool_only_guardians and not is_student(person) and not has_duties(person):
+            continue
+        if not person_id or not first_value(person.get("eduPersonPrincipalNames")):
+            continue
+        included.add(person_id)
+
+    return included
+
+
+def rows(persons: list[dict[str, Any]]) -> list[dict[str, str]]:
+    generated: list[dict[str, str]] = []
+    included = included_person_ids(persons)
+
+    for person in persons:
+        person_id = ref_id(person.get("id"))
+        if person_id not in included:
             continue
 
         eppn = first_value(person.get("eduPersonPrincipalNames"))

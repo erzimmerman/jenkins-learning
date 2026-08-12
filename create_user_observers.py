@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ss12000_common import as_list, extract_collection, first_value, load_json, nested, ref_id, text
+from create_users_filtered import included_person_ids
+from ss12000_common import as_list, extract_collection, first_value, load_json, ref_id, text
 
 
 COLUMNS = ["observer_id", "student_id", "status"]
@@ -46,23 +47,20 @@ def observer_status(person: dict[str, Any]) -> str:
     return "active" if text(person.get("personStatus")).casefold() == "aktiv" else "inactive"
 
 
-def is_preschool_student(person: dict[str, Any]) -> bool:
-    for placement in as_list(nested(person, "_embedded.placements")):
-        if not isinstance(placement, dict):
-            continue
-        if text(placement.get("schoolType")).casefold() == "fs":
-            return True
-    return False
-
-
 def rows(persons: list[dict[str, Any]]) -> list[dict[str, str]]:
-    person_eppns = eppn_index(persons)
+    included = included_person_ids(persons)
+    person_eppns = {
+        person_id: eppn
+        for person_id, eppn in eppn_index(persons).items()
+        if person_id in included
+    }
     generated: list[dict[str, str]] = []
 
     for student in persons:
         if not is_student(student):
             continue
-        if is_preschool_student(student):
+        student_person_id = ref_id(student.get("id"))
+        if student_person_id not in included:
             continue
 
         student_id = first_value(student.get("eduPersonPrincipalNames"))
@@ -79,6 +77,8 @@ def rows(persons: list[dict[str, Any]]) -> list[dict[str, str]]:
                 continue
 
             responsible_person_id = ref_id(responsible.get("person"))
+            if responsible_person_id not in included:
+                continue
             observer_id = person_eppns.get(responsible_person_id, "")
 
             # The prompt explicitly says to omit rows with an empty observer_id.
