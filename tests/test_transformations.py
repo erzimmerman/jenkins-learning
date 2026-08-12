@@ -295,6 +295,28 @@ class TransformationTests(unittest.TestCase):
                         ]
                     },
                 },
+                {
+                    "id": "fklass-course",
+                    "startDate": "2026-08-17",
+                    "endDate": "2099-06-30",
+                    "organisation": {
+                        "displayName": "Lärande Grundskola Magneten"
+                    },
+                    "syllabus": {"displayName": "Förskoleklass"},
+                    "_embedded": {
+                        "syllabus": {
+                            "schoolType": "FKLASS",
+                            "subjectName": "Förskoleklass",
+                        },
+                        "groups": [
+                            {
+                                "id": "fklass-a",
+                                "displayName": "FKA",
+                                "startDate": "2026-08-17",
+                            }
+                        ],
+                    },
+                },
             ]
         }
 
@@ -313,7 +335,7 @@ class TransformationTests(unittest.TestCase):
             )
 
             courses = read_csv(output_path)
-            self.assertEqual(len(courses), 4)
+            self.assertEqual(len(courses), 5)
 
             gr_course = next(row for row in courses if row["course_id"] == "gr-course")
             self.assertEqual(gr_course["short_name"], "Matematik")
@@ -342,6 +364,14 @@ class TransformationTests(unittest.TestCase):
             )
             self.assertEqual(fallback["short_name"], "BA24,GYARB")
             self.assertEqual(fallback["long_name"], fallback["short_name"])
+
+            fklass = next(
+                row for row in courses if row["course_id"] == "fklass-course"
+            )
+            self.assertEqual(fklass["short_name"], "Förskoleklass")
+            self.assertEqual(fklass["long_name"], "Förskoleklass")
+            self.assertEqual(fklass["account_id"], "11")
+            self.assertEqual(fklass["term_id"], "26_27_11")
 
             for line in output_path.read_text(encoding="utf-8-sig").splitlines():
                 self.assertTrue(line.startswith('"'))
@@ -386,9 +416,16 @@ class TransformationTests(unittest.TestCase):
                                 "id": "section-1",
                                 "groupMemberships": [
                                     {"person": {"id": "membership-teacher"}},
+                                    {"person": {"id": "activity-teacher"}},
                                     {"person": {"id": "student-person"}},
                                 ],
-                            }
+                            },
+                            {
+                                "id": "section-2",
+                                "groupMemberships": [
+                                    {"person": {"id": "student-person"}}
+                                ],
+                            },
                         ],
                     },
                 }
@@ -429,6 +466,15 @@ class TransformationTests(unittest.TestCase):
                         "course_id": "activity-1",
                         "start_date": "2025-08-18",
                         "end_date": "2026-01-10",
+                        "user_id": "activity-teacher@example.se",
+                        "role": "teacher",
+                        "section_id": "activity-1_section-1",
+                        "status": "completed",
+                    },
+                    {
+                        "course_id": "activity-1",
+                        "start_date": "2025-08-18",
+                        "end_date": "2026-01-10",
                         "user_id": "student@example.se",
                         "role": "student",
                         "section_id": "activity-1_section-1",
@@ -438,9 +484,18 @@ class TransformationTests(unittest.TestCase):
                         "course_id": "activity-1",
                         "start_date": "2025-08-18",
                         "end_date": "2026-01-10",
+                        "user_id": "student@example.se",
+                        "role": "student",
+                        "section_id": "activity-1_section-2",
+                        "status": "completed",
+                    },
+                    {
+                        "course_id": "activity-1",
+                        "start_date": "2025-08-18",
+                        "end_date": "2026-01-10",
                         "user_id": "activity-teacher@example.se",
                         "role": "teacher",
-                        "section_id": "activity-1_section-1",
+                        "section_id": "activity-1_section-2",
                         "status": "completed",
                     },
                 ],
@@ -487,6 +542,19 @@ class TransformationTests(unittest.TestCase):
                     "id": "not-a-student",
                     "eduPersonPrincipalNames": ["staff@example.se"],
                     "personStatus": "Aktiv",
+                    "responsibles": [
+                        {
+                            "relationType": "Vårdnadshavare",
+                            "person": {"id": "valid-observer"},
+                        }
+                    ],
+                },
+                {
+                    "id": "yh-student",
+                    "eduPersonPrincipalNames": ["yh-student@example.se"],
+                    "personStatus": "Aktiv",
+                    "externalIdentifiers": [{"context": "studentguid"}],
+                    "enrolments": [{"schoolType": "YH"}],
                     "responsibles": [
                         {
                             "relationType": "Vårdnadshavare",

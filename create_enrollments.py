@@ -186,35 +186,40 @@ def rows(
                     "section_id": section_id,
                 })
 
-        # The expanded teachers list may contain teachers that are absent from
-        # groupMemberships. It has no group reference, so the activity's first
-        # group supplies section_id, matching the established integration rule.
+        # Teachers in _embedded.teachers apply to the activity, while section_id
+        # requires a group. Create one teacher enrollment for every group in
+        # the activity. An exact duplicate is removed below if the same teacher
+        # is also present in that group's groupMemberships.
         teachers = activity_teachers(activity)
         if teachers and not group_ids:
             raise ValueError(
                 f"Activity {base['course_id']!r} has teachers but no expanded group id "
                 "to use as section_id"
             )
-        if len(group_ids) > 1 and teachers:
-            print(
-                f"Activity {base['course_id']} has multiple groups; teachers from "
-                f"_embedded.teachers use the first group, {group_ids[0]}.",
-                file=sys.stderr,
-            )
         for teacher in teachers:
             person_id = ref_id(teacher.get("person"))
-            generated.append({
-                **base,
-                "user_id": lookup_user_id(
-                    user_ids,
-                    person_id,
-                    f"Activity {base['course_id']} _embedded.teachers",
-                ),
-                "role": "teacher",
-                "section_id": section_id_for(base["course_id"], group_ids[0]),
-            })
+            teacher_user_id = lookup_user_id(
+                user_ids,
+                person_id,
+                f"Activity {base['course_id']} _embedded.teachers",
+            )
+            for group_id in group_ids:
+                generated.append({
+                    **base,
+                    "user_id": teacher_user_id,
+                    "role": "teacher",
+                    "section_id": section_id_for(base["course_id"], group_id),
+                })
 
-    return generated
+    unique: list[dict[str, str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for row in generated:
+        identity = tuple(row[column] for column in COLUMNS)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(row)
+    return unique
 
 
 def write_enrollments(path: Path, enrollment_rows: list[dict[str, str]]) -> int:
