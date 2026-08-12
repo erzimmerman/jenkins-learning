@@ -125,7 +125,8 @@ def names_for(
         )
     ).upper()
 
-    if school_type == "GR":
+    # FKLASS (förskoleklass) follows the same naming rule as grundskola.
+    if school_type in {"GR", "FKLASS"}:
         short_name = text(
             nested(
                 activity,
@@ -155,7 +156,7 @@ def names_for(
     else:
         raise ValueError(
             f"Unsupported syllabus.schoolType {school_type!r} for Activity "
-            f"{ref_id(activity.get('id'))!r}; expected 'GR' or 'GY'"
+            f"{ref_id(activity.get('id'))!r}; expected 'GR', 'FKLASS' or 'GY'"
         )
 
     if not short_name:
