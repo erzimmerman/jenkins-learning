@@ -49,12 +49,19 @@ class TransformationTests(unittest.TestCase):
                 {"id": "student-5", "givenName": "Eva", "familyName": "Elev", "eduPersonPrincipalNames": ["eva@example.se"]},
                 {"id": "observer-1", "givenName": "Olle", "familyName": "Vårdnadshavare", "eduPersonPrincipalNames": ["olle@example.se"]},
                 {"id": "observer-2", "givenName": "Vera", "familyName": "Vårdnadshavare", "eduPersonPrincipalNames": ["vera@example.se"]},
-                {"id": "teacher-1", "givenName": "Tina", "familyName": "Lärare", "eduPersonPrincipalNames": ["tina@example.se"], "duties": [{"id": "duty-1"}]},
+                {"id": "observer-3", "givenName": "Pelle", "familyName": "Förskoleförälder", "eduPersonPrincipalNames": ["pelle@example.se"]},
+                {"id": "teacher-1", "givenName": "Tina", "familyName": "Lärare", "eduPersonPrincipalNames": ["tina@example.se"], "_embedded": {"duties": [{"id": "duty-1"}]}},
+                {"id": "teacher-2", "givenName": "Tom", "familyName": "Lärare", "eduPersonPrincipalNames": ["tom@example.se"], "_embedded": {"duties": [{"id": "duty-2"}]}},
                 {
                     "id": "preschool-student",
                     "givenName": "Filip",
                     "familyName": "Förskola",
                     "eduPersonPrincipalNames": ["filip@example.se"],
+                    "externalIdentifiers": [{"context": "studentguid"}],
+                    "responsibles": [
+                        {"relationType": "Vårdnadshavare", "person": {"id": "observer-1"}},
+                        {"relationType": "Vårdnadshavare", "person": {"id": "observer-3"}},
+                    ],
                     "_embedded": {
                         "placements": [{"schoolType": "FS"}]
                     },
@@ -101,6 +108,7 @@ class TransformationTests(unittest.TestCase):
                                     {"person": {"id": "student-3"}},
                                     {"person": {"id": "student-4"}},
                                     {"person": {"id": "student-5"}},
+                                    {"person": {"id": "teacher-2"}},
                                 ],
                             }
                         ],
@@ -130,7 +138,7 @@ class TransformationTests(unittest.TestCase):
             run(invocation[0], *invocation[1:], "--output", str(tmp_path / filename))
 
         users = read_csv(tmp_path / "users_filtered.csv")
-        self.assertEqual(len(users), 8)
+        self.assertEqual(len(users), 9)
         self.assertEqual(
             users[0],
             {
@@ -151,6 +159,8 @@ class TransformationTests(unittest.TestCase):
         )
         self.assertNotIn("filip@example.se", {row["user_id"] for row in users})
         self.assertNotIn("ylva@example.se", {row["user_id"] for row in users})
+        self.assertNotIn("pelle@example.se", {row["user_id"] for row in users})
+        self.assertIn("olle@example.se", {row["user_id"] for row in users})
         for line in (tmp_path / "users_filtered.csv").read_text(
             encoding="utf-8-sig"
         ).splitlines():
@@ -170,7 +180,7 @@ class TransformationTests(unittest.TestCase):
             read_csv(tmp_path / "sections.csv"),
             [
                 {
-                    "section_id": "section-1",
+                    "section_id": "course-1_section-1",
                     "course_id": "course-1",
                     "name": "Svenska 7A",
                     "status": "active",
@@ -192,7 +202,7 @@ class TransformationTests(unittest.TestCase):
                     "short_name": "Svenska",
                     "long_name": "Svenska",
                     "account_id": "10",
-                    "term_id": "98*99*10",
+                    "term_id": "98_99_10",
                     "status": "active",
                     "start_date": "2099-01-10",
                     "end_date": "2099-06-30",
@@ -215,10 +225,11 @@ class TransformationTests(unittest.TestCase):
                 ("david@example.se", "student"),
                 ("eva@example.se", "student"),
                 ("tina@example.se", "teacher"),
+                ("tom@example.se", "teacher"),
             },
         )
-        self.assertEqual(len(enrollments), 6)
-        self.assertEqual({row["section_id"] for row in enrollments}, {"section-1"})
+        self.assertEqual(len(enrollments), 7)
+        self.assertEqual({row["section_id"] for row in enrollments}, {"course-1_section-1"})
         self.assertEqual({row["status"] for row in enrollments}, {"active"})
         first_enrollment_line = (tmp_path / "enrollments.csv").read_text(encoding="utf-8-sig").splitlines()[1]
         self.assertTrue(first_enrollment_line.startswith('"'))
@@ -308,18 +319,18 @@ class TransformationTests(unittest.TestCase):
             self.assertEqual(gr_course["short_name"], "Matematik")
             self.assertEqual(gr_course["long_name"], "Matematik")
             self.assertEqual(gr_course["account_id"], "10")
-            self.assertEqual(gr_course["term_id"], "25*26*10")
+            self.assertEqual(gr_course["term_id"], "25_26_10")
             self.assertEqual(gr_course["status"], "completed")
             self.assertEqual(gr_course["course_format"], "")
 
             gy_courses = [row for row in courses if row["course_id"] == "gy-course"]
             self.assertEqual(
                 {row["term_id"] for row in gy_courses},
-                {"26*27*17", "27*28*17"},
+                {"26_27_17", "27_28_17"},
             )
             self.assertEqual(
                 {row["short_name"] for row in gy_courses},
-                {"TE4A/TE4B/PRRPRR01"},
+                {"TE4A,TE4B,PRRPRR01"},
             )
             self.assertEqual(
                 {row["long_name"] for row in gy_courses},
@@ -329,7 +340,7 @@ class TransformationTests(unittest.TestCase):
             fallback = next(
                 row for row in courses if row["course_id"] == "gy-fallback"
             )
-            self.assertEqual(fallback["short_name"], "BA24/GYARB")
+            self.assertEqual(fallback["short_name"], "BA24,GYARB")
             self.assertEqual(fallback["long_name"], fallback["short_name"])
 
             for line in output_path.read_text(encoding="utf-8-sig").splitlines():
@@ -340,8 +351,14 @@ class TransformationTests(unittest.TestCase):
         persons = {
             "persons": [
                 {
-                    "id": "teacher-person",
-                    "eduPersonPrincipalNames": ["teacher@example.se"],
+                    "id": "membership-teacher",
+                    "eduPersonPrincipalNames": ["membership-teacher@example.se"],
+                    "_embedded": {"duties": [{"id": "duty-1"}]},
+                },
+                {
+                    "id": "activity-teacher",
+                    "eduPersonPrincipalNames": ["activity-teacher@example.se"],
+                    "_embedded": {"duties": [{"id": "duty-2"}]},
                 },
                 {
                     "id": "student-person",
@@ -361,14 +378,15 @@ class TransformationTests(unittest.TestCase):
                         "teachers": [
                             {
                                 "id": "teacher-duty",
-                                "person": {"id": "teacher-person"},
+                                "person": {"id": "activity-teacher"},
                             }
                         ],
                         "groups": [
                             {
                                 "id": "section-1",
                                 "groupMemberships": [
-                                    {"person": {"id": "student-person"}}
+                                    {"person": {"id": "membership-teacher"}},
+                                    {"person": {"id": "student-person"}},
                                 ],
                             }
                         ],
@@ -402,9 +420,9 @@ class TransformationTests(unittest.TestCase):
                         "course_id": "activity-1",
                         "start_date": "2025-08-18",
                         "end_date": "2026-01-10",
-                        "user_id": "teacher@example.se",
+                        "user_id": "membership-teacher@example.se",
                         "role": "teacher",
-                        "section_id": "section-1",
+                        "section_id": "activity-1_section-1",
                         "status": "completed",
                     },
                     {
@@ -413,7 +431,16 @@ class TransformationTests(unittest.TestCase):
                         "end_date": "2026-01-10",
                         "user_id": "student@example.se",
                         "role": "student",
-                        "section_id": "section-1",
+                        "section_id": "activity-1_section-1",
+                        "status": "completed",
+                    },
+                    {
+                        "course_id": "activity-1",
+                        "start_date": "2025-08-18",
+                        "end_date": "2026-01-10",
+                        "user_id": "activity-teacher@example.se",
+                        "role": "teacher",
+                        "section_id": "activity-1_section-1",
                         "status": "completed",
                     },
                 ],

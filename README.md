@@ -50,58 +50,48 @@ enrollments.csv
 courses.csv
 ```
 
-## Viktiga mappningsantaganden
+## Aktuella CSV-mappningar
 
-CSV-filerna följer de uttryckliga mappningarna för integrationen och tolererar
-flera vanliga SS12000-representationer:
-
-- En aktivitet blir en section (`Activity.id`).
-- Course ID tas i ordning från `parentActivity`, `course`, `syllabus`, `subject`
-  och till sist aktivitetens eget ID.
-- Deltagare kan ligga direkt i aktivitetens `students`, `members`, `participants`
-  eller `teachers`, i inbäddade gruppmedlemskap eller som aktivitetsmedlemskap på
-  personen.
-- Observerrelationer kan vara studentcentrerade (`responsiblePersons`, `guardians`,
-  `parents`, `contacts`) eller observercentrerade (`responsibleFor`, `students`,
-  `children`). Båda personerna måste finnas i persons-exporten.
-- Status normaliseras till Canvas `active`/`deleted`.
-- CSV skrivs som UTF-8 med BOM för säker visning av svenska tecken i Excel.
+CSV-filerna följer de fem daterade definitionerna från augusti 2026. Samtliga
+filer skrivs kommaseparerade som UTF-8 med BOM och alla fält citeras.
 
 `users_filtered.csv` använder personens första `eduPersonPrincipalNames` som
 både `user_id` och `login_id`. `personStatus=Aktiv` ger `active`; alla andra
 värden ger `suspended`. Elever med `_embedded.placements.schoolType=FS` eller
-`enrolments.schoolType=YH` utelämnas. Alla andra personer behålls och samtliga
-fält skrivs inom dubbla citattecken.
+`enrolments.schoolType=YH` utelämnas. En vårdnadshavare som endast är kopplad
+till förskolebarn utelämnas också; har vårdnadshavaren minst ett barn i en annan
+skolform behålls personen.
 
-`sections.csv` skapar en rad per referens i `Activity.groups`. Gruppens
-`displayName` hämtas från motsvarande objekt i `_embedded.groups`, medan
-`course_id`, `start_date` och `end_date` hämtas från aktivitetens toppnivå.
-Status är alltid `active` och samtliga fält skrivs inom dubbla citattecken.
+`sections.csv` skapar en rad per grupp. `section_id` byggs som
+`Activity.id_Group.id`. Gruppens `displayName` hämtas från motsvarande objekt i
+`_embedded.groups`, medan `course_id`, `start_date` och `end_date` hämtas från
+aktivitetens toppnivå. Status är alltid `active`.
 
-`enrollments.csv` följer den särskilda SchoolSoft-mappningen: varje lärare i
-`Activity._embedded.teachers` och varje elev i
-`Activity._embedded.groups.groupMemberships` ger en rad. `course_id` är
-aktivitetens ID, `section_id` är gruppens ID och `user_id` är personens första
-`eduPersonPrincipalNames`-värde efter uppslag i Persons. En passerad
-`Activity.endDate` ger status `completed`; annars blir status `active`. Samtliga
-fält i filen skrivs inom dubbla citattecken. Eftersom toppnivåns `teachers` i
-det verkliga API-svaret endast innehåller en duty-referens hämtas lärarens
-`person.id` från den expanderade listan `_embedded.teachers`.
+`enrollments.csv` skapar en rad för varje medlemskap i
+`Activity._embedded.groups.groupMemberships`. Personen slås upp i Persons;
+finns innehåll i `_embedded.duties` blir rollen `teacher`, annars `student`.
+Dessutom skapas en lärarrad för varje person i `Activity._embedded.teachers`.
+`section_id` byggs som `Activity.id_Group.id` och `user_id` är personens första
+`eduPersonPrincipalNames`. En passerad `Activity.endDate` ger `completed`,
+annars `active`. Om en aktivitet har flera grupper används den första gruppen
+för lärare som endast finns i `_embedded.teachers`, eftersom lärarobjektet inte
+innehåller någon gruppreferens.
 
 `courses.csv` traverserar varje Activity en gång per expanderad grupp. För
 grundskolan används `_embedded.syllabus.subjectName`. För gymnasiet består `short_name` av
-gruppernas `displayName` följt av `syllabus.displayName`, medan `long_name` tas
+gruppernas `displayName` följt av `syllabus.displayName`, separerade med
+kommatecken, medan `long_name` tas
 från `_embedded.syllabus.courseName`. `account_id` slås upp från organisationens
 `displayName`, och gruppens `startDate` skapar ett läsårs-ID på formen
-`25*26*10`. Endast helt identiska rader tas bort och samtliga fält citeras.
+`25_26_10`. Endast helt identiska rader tas bort.
 
 `user_observers.csv` tar endast med personer där ett objekt i
 `externalIdentifiers` har `context=studentguid`. Varje objekt i elevens
 `responsibles` med `relationType=Vårdnadshavare` ger en rad. Både
 `observer_id` och `student_id` är första EPPN-värdet efter uppslag i Persons.
 Elevens `personStatus=Aktiv` ger `active`; alla andra värden ger `inactive`.
-Relationer där någon av identifierarna blir tom utelämnas. Samtliga fält skrivs
-inom dubbla citattecken.
+Förskoleelever (`_embedded.placements.schoolType=FS`) och relationer där någon
+av identifierarna blir tom utelämnas.
 
 Om SchoolSoft-svaret använder andra fältnamn behöver endast funktionerna i
 `ss12000_common.py`, `create_users_filtered.py`, `create_user_observers.py` och

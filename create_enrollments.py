@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from ss12000_common import as_list, extract_collection, first_value, load_json, ref_id, text
+from ss12000_common import as_list, extract_collection, first_value, load_json, nested, ref_id, text
 
 
 COLUMNS = [
@@ -40,6 +40,19 @@ def person_user_ids(persons: list[dict[str, Any]]) -> dict[str, str]:
         if person_id and user_id:
             result[person_id] = user_id
     return result
+
+
+def person_index(persons: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        person_id: person
+        for person in persons
+        if (person_id := ref_id(person.get("id")))
+    }
+
+
+def membership_role(person: dict[str, Any]) -> str:
+    duties = nested(person, "_embedded.duties")
+    return "teacher" if as_list(duties) else "student"
 
 
 def embedded_groups(activity: dict[str, Any]) -> list[dict[str, Any]]:
@@ -100,6 +113,27 @@ def lookup_user_id(index: dict[str, str], person_id: str, context: str) -> str:
     return user_id
 
 
+def lookup_person(
+    index: dict[str, dict[str, Any]],
+    person_id: str,
+    context: str,
+) -> dict[str, Any]:
+    if not person_id:
+        raise ValueError(f"Missing person.id for {context}")
+    person = index.get(person_id)
+    if person is None:
+        raise ValueError(
+            f"Person {person_id!r}, referenced by {context}, was not found in Persons"
+        )
+    return person
+
+
+def section_id_for(course_id: str, group_id: str) -> str:
+    if not group_id:
+        raise ValueError(f"Activity {course_id!r} has a group without id")
+    return f"{course_id}_{group_id}"
+
+
 def base_row(activity: dict[str, Any]) -> dict[str, str]:
     course_id = ref_id(activity.get("id"))
     if not course_id:
@@ -119,6 +153,7 @@ def rows(
     activities: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     user_ids = person_user_ids(persons)
+    persons_by_id = person_index(persons)
     generated: list[dict[str, str]] = []
 
     for activity in activities:
@@ -127,6 +162,33 @@ def rows(
         group_ids = [ref_id(group.get("id")) for group in groups]
         group_ids = [group_id for group_id in group_ids if group_id]
 
+        # Every group membership becomes a row. Persons._embedded.duties
+        # determines whether that membership is a teacher or a student.
+        for group in groups:
+            group_id = ref_id(group.get("id"))
+            section_id = section_id_for(base["course_id"], group_id)
+            memberships = group.get("groupMemberships")
+            if memberships is None:
+                memberships = group.get("groupmemberships")
+            for membership in as_list(memberships):
+                if not isinstance(membership, dict):
+                    continue
+                person_id = ref_id(membership.get("person"))
+                context = (
+                    f"Activity {base['course_id']} group {group_id} "
+                    "groupMemberships"
+                )
+                person = lookup_person(persons_by_id, person_id, context)
+                generated.append({
+                    **base,
+                    "user_id": lookup_user_id(user_ids, person_id, context),
+                    "role": membership_role(person),
+                    "section_id": section_id,
+                })
+
+        # The expanded teachers list may contain teachers that are absent from
+        # groupMemberships. It has no group reference, so the activity's first
+        # group supplies section_id, matching the established integration rule.
         teachers = activity_teachers(activity)
         if teachers and not group_ids:
             raise ValueError(
@@ -135,48 +197,22 @@ def rows(
             )
         if len(group_ids) > 1 and teachers:
             print(
-                f"Activity {base['course_id']} has multiple groups; teacher enrollments "
-                f"use the first group, {group_ids[0]}.",
+                f"Activity {base['course_id']} has multiple groups; teachers from "
+                f"_embedded.teachers use the first group, {group_ids[0]}.",
                 file=sys.stderr,
             )
-
-        # Exactly one row for every teacher on the activity.
         for teacher in teachers:
             person_id = ref_id(teacher.get("person"))
             generated.append({
                 **base,
                 "user_id": lookup_user_id(
-                    user_ids, person_id, f"Activity {base['course_id']} teachers"
+                    user_ids,
+                    person_id,
+                    f"Activity {base['course_id']} _embedded.teachers",
                 ),
                 "role": "teacher",
-                "section_id": group_ids[0],
+                "section_id": section_id_for(base["course_id"], group_ids[0]),
             })
-
-        # Exactly one row for every student group membership. The group that
-        # contains the membership supplies section_id.
-        for group in groups:
-            section_id = ref_id(group.get("id"))
-            if not section_id:
-                raise ValueError(
-                    f"An expanded group in Activity {base['course_id']!r} is missing id"
-                )
-            memberships = group.get("groupMemberships")
-            if memberships is None:
-                memberships = group.get("groupmemberships")
-            for membership in as_list(memberships):
-                if not isinstance(membership, dict):
-                    continue
-                person_id = ref_id(membership.get("person"))
-                generated.append({
-                    **base,
-                    "user_id": lookup_user_id(
-                        user_ids,
-                        person_id,
-                        f"Activity {base['course_id']} group {section_id} groupMemberships",
-                    ),
-                    "role": "student",
-                    "section_id": section_id,
-                })
 
     return generated
 

@@ -99,7 +99,7 @@ def rows(activities: list[dict[str, Any]]) -> list[dict[str, str]]:
                 )
             generated.append(
                 {
-                    "section_id": section_id,
+                    "section_id": f"{course_id}_{section_id}",
                     "course_id": course_id,
                     "name": name,
                     "status": "active",

@@ -140,7 +140,7 @@ def names_for(
         group_names = [text(group.get("displayName")) for group in groups]
         group_names = [name for name in group_names if name]
         syllabus_name = text(nested(activity, "syllabus.displayName"))
-        short_name = "/".join([*group_names, syllabus_name] if syllabus_name else group_names)
+        short_name = ",".join([*group_names, syllabus_name] if syllabus_name else group_names)
         long_name = text(
             nested(
                 activity,
@@ -182,7 +182,7 @@ def term_id_for(group: dict[str, Any], account_id: str, course_id: str) -> str:
         first_year = group_start.year
         second_year = group_start.year + 1
 
-    return f"{first_year % 100:02d}*{second_year % 100:02d}*{account_id}"
+    return f"{first_year % 100:02d}_{second_year % 100:02d}_{account_id}"
 
 
 def course_status(end_date: Any) -> str:

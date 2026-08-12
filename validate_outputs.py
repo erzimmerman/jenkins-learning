@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 from pathlib import Path
 
@@ -45,12 +46,23 @@ def main() -> int:
     }
     course_ids = {row["course_id"] for row in data.get("courses.csv", [])}
     section_ids = {row["section_id"] for row in data.get("sections.csv", [])}
+    for row in data.get("users_filtered.csv", []):
+        if not row["user_id"] or row["user_id"] != row["login_id"]:
+            errors.append(f"User has invalid EPPN identifiers: {row}")
+        if row["status"] not in {"active", "suspended"}:
+            errors.append(f"User has invalid status: {row}")
     for row in data.get("user_observers.csv", []):
         if row["observer_id"] not in user_ids or row["student_id"] not in user_ids:
             errors.append(f"Observer relationship references an unknown user: {row}")
+        if row["status"] not in {"active", "inactive"}:
+            errors.append(f"Observer relationship has invalid status: {row}")
     for row in data.get("sections.csv", []):
         if row["course_id"] not in course_ids:
             errors.append(f"Section references an unknown course: {row}")
+        if not row["section_id"].startswith(f"{row['course_id']}_"):
+            errors.append(f"Section has invalid composite section_id: {row}")
+        if row["status"] != "active":
+            errors.append(f"Section has invalid status: {row}")
     for row in data.get("enrollments.csv", []):
         if row["user_id"] not in user_ids:
             errors.append(f"Enrollment references an unknown user: {row}")
@@ -58,6 +70,21 @@ def main() -> int:
             errors.append(f"Enrollment references an unknown course: {row}")
         if row["section_id"] not in section_ids:
             errors.append(f"Enrollment references an unknown section: {row}")
+        if row["role"] not in {"teacher", "student"}:
+            errors.append(f"Enrollment has invalid role: {row}")
+        if row["status"] not in {"active", "completed"}:
+            errors.append(f"Enrollment has invalid status: {row}")
+    seen_courses: set[tuple[str, ...]] = set()
+    course_columns = REQUIRED_COLUMNS["courses.csv"]
+    for row in data.get("courses.csv", []):
+        identity = tuple(row[column] for column in course_columns)
+        if identity in seen_courses:
+            errors.append(f"courses.csv contains an identical duplicate row: {row}")
+        seen_courses.add(identity)
+        if not re.fullmatch(r"\d{2}_\d{2}_\d+", row["term_id"]):
+            errors.append(f"Course has invalid term_id: {row}")
+        if row["status"] not in {"active", "completed"}:
+            errors.append(f"Course has invalid status: {row}")
     if errors:
         for error in errors:
             print(f"Validation error: {error}", file=sys.stderr)

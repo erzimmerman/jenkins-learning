@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ss12000_common import as_list, extract_collection, first_value, load_json, nested, text
+from ss12000_common import as_list, extract_collection, first_value, load_json, nested, ref_id, text
 
 
 COLUMNS = [
@@ -56,11 +56,56 @@ def user_status(person_status: Any) -> str:
     return "active" if text(person_status).casefold() == "aktiv" else "suspended"
 
 
+def is_student(person: dict[str, Any]) -> bool:
+    for identifier in as_list(person.get("externalIdentifiers")):
+        if not isinstance(identifier, dict):
+            continue
+        if text(identifier.get("context")).casefold() == "studentguid":
+            return True
+    return False
+
+
+def is_preschool_student(person: dict[str, Any]) -> bool:
+    return contains_school_type(nested(person, "_embedded.placements"), "FS")
+
+
+def guardian_ids_by_child_school_type(
+    persons: list[dict[str, Any]],
+) -> tuple[set[str], set[str]]:
+    preschool_guardians: set[str] = set()
+    other_guardians: set[str] = set()
+
+    for student in persons:
+        if not is_student(student):
+            continue
+        target = preschool_guardians if is_preschool_student(student) else other_guardians
+        for responsible in as_list(student.get("responsibles")):
+            if not isinstance(responsible, dict):
+                continue
+            if text(responsible.get("relationType")).casefold() != "vårdnadshavare":
+                continue
+            guardian_id = ref_id(responsible.get("person"))
+            if guardian_id:
+                target.add(guardian_id)
+
+    return preschool_guardians, other_guardians
+
+
+def has_duties(person: dict[str, Any]) -> bool:
+    return bool(as_list(nested(person, "_embedded.duties", "duties")))
+
+
 def rows(persons: list[dict[str, Any]]) -> list[dict[str, str]]:
     generated: list[dict[str, str]] = []
+    preschool_guardians, other_guardians = guardian_ids_by_child_school_type(persons)
+    preschool_only_guardians = preschool_guardians - other_guardians
 
     for person in persons:
         if excluded_student(person):
+            continue
+
+        person_id = ref_id(person.get("id"))
+        if person_id in preschool_only_guardians and not is_student(person) and not has_duties(person):
             continue
 
         eppn = first_value(person.get("eduPersonPrincipalNames"))

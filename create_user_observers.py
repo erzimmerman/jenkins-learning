@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ss12000_common import as_list, extract_collection, first_value, load_json, ref_id, text
+from ss12000_common import as_list, extract_collection, first_value, load_json, nested, ref_id, text
 
 
 COLUMNS = ["observer_id", "student_id", "status"]
@@ -46,12 +46,23 @@ def observer_status(person: dict[str, Any]) -> str:
     return "active" if text(person.get("personStatus")).casefold() == "aktiv" else "inactive"
 
 
+def is_preschool_student(person: dict[str, Any]) -> bool:
+    for placement in as_list(nested(person, "_embedded.placements")):
+        if not isinstance(placement, dict):
+            continue
+        if text(placement.get("schoolType")).casefold() == "fs":
+            return True
+    return False
+
+
 def rows(persons: list[dict[str, Any]]) -> list[dict[str, str]]:
     person_eppns = eppn_index(persons)
     generated: list[dict[str, str]] = []
 
     for student in persons:
         if not is_student(student):
+            continue
+        if is_preschool_student(student):
             continue
 
         student_id = first_value(student.get("eduPersonPrincipalNames"))
