@@ -7,7 +7,16 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from ss12000_common import as_list, extract_collection, first_value, load_json, nested, ref_id, text
+from ss12000_common import (
+    as_list,
+    duty_to_person_index,
+    extract_collection,
+    first_value,
+    load_json,
+    nested,
+    ref_id,
+    text,
+)
 
 
 COLUMNS = [
@@ -51,7 +60,9 @@ def person_index(persons: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def membership_role(person: dict[str, Any]) -> str:
-    duties = nested(person, "_embedded.duties")
+    # The current SS12000 response stores duties below _embedded. Keep direct
+    # duties as a compatibility fallback for other implementations.
+    duties = nested(person, "_embedded.duties", "duties")
     return "teacher" if as_list(duties) else "student"
 
 
@@ -70,24 +81,53 @@ def embedded_groups(activity: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def activity_teachers(activity: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return expanded duties, where the actual teacher is available as person.id."""
+def activity_teacher_person_ids(
+    activity: dict[str, Any],
+    duty_persons: dict[str, str],
+) -> list[str]:
+    """Return the union of teacher persons referenced by an activity.
+
+    SS12000 can expose teachers as expanded records in ``_embedded.teachers``
+    and as duty references in the activity's top-level ``teachers`` list. The
+    latter can be resolved either against the expanded records or, when an API
+    page was not expanded, against Persons._embedded.duties.
+    """
+    expanded_teachers: list[dict[str, Any]] = []
     embedded = activity.get("_embedded")
     if isinstance(embedded, dict):
         teachers = embedded.get("teachers")
         if isinstance(teachers, list):
-            return [teacher for teacher in teachers if isinstance(teacher, dict)]
+            expanded_teachers = [
+                teacher for teacher in teachers if isinstance(teacher, dict)
+            ]
 
-    # Fallback for implementations that put expanded teachers directly on the
-    # activity. Duty-only references without person.id are not usable here.
+    expanded_duties = {
+        duty_id: person_id
+        for teacher in expanded_teachers
+        if (duty_id := ref_id(teacher.get("id") or teacher.get("duty")))
+        if (person_id := ref_id(teacher.get("person")))
+    }
+
+    person_ids: list[str] = []
+    for teacher in expanded_teachers:
+        person_id = ref_id(teacher.get("person"))
+        if person_id:
+            person_ids.append(person_id)
+
     teachers = activity.get("teachers")
     if isinstance(teachers, list):
-        return [
-            teacher
-            for teacher in teachers
-            if isinstance(teacher, dict) and ref_id(teacher.get("person"))
-        ]
-    return []
+        for teacher in teachers:
+            if not isinstance(teacher, dict):
+                continue
+            person_id = ref_id(teacher.get("person"))
+            if not person_id:
+                duty_id = ref_id(teacher.get("duty") or teacher.get("id"))
+                person_id = expanded_duties.get(duty_id) or duty_persons.get(duty_id)
+            if person_id:
+                person_ids.append(person_id)
+
+    # Preserve source order while preventing duplicate teacher enrollments.
+    return list(dict.fromkeys(person_ids))
 
 
 def enrollment_status(end_date: Any) -> str:
@@ -154,6 +194,7 @@ def rows(
 ) -> list[dict[str, str]]:
     user_ids = person_user_ids(persons)
     persons_by_id = person_index(persons)
+    duty_persons = duty_to_person_index(persons)
     generated: list[dict[str, str]] = []
 
     for activity in activities:
@@ -190,14 +231,13 @@ def rows(
         # requires a group. Create one teacher enrollment for every group in
         # the activity. An exact duplicate is removed below if the same teacher
         # is also present in that group's groupMemberships.
-        teachers = activity_teachers(activity)
-        if teachers and not group_ids:
+        teacher_person_ids = activity_teacher_person_ids(activity, duty_persons)
+        if teacher_person_ids and not group_ids:
             raise ValueError(
                 f"Activity {base['course_id']!r} has teachers but no expanded group id "
                 "to use as section_id"
             )
-        for teacher in teachers:
-            person_id = ref_id(teacher.get("person"))
+        for person_id in teacher_person_ids:
             teacher_user_id = lookup_user_id(
                 user_ids,
                 person_id,
@@ -249,7 +289,12 @@ def main() -> int:
                 "_embedded.groups.groupMemberships could be converted"
             )
         count = write_enrollments(Path(args.output), enrollment_rows)
-        print(f"Created {args.output} with {count} rows.")
+        teacher_count = sum(row["role"] == "teacher" for row in enrollment_rows)
+        student_count = sum(row["role"] == "student" for row in enrollment_rows)
+        print(
+            f"Created {args.output} with {count} rows "
+            f"({teacher_count} teachers, {student_count} students)."
+        )
         return 0
     except Exception as exc:
         print(f"Could not create enrollments CSV: {exc}", file=sys.stderr)

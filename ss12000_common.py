@@ -186,10 +186,13 @@ def duty_to_person_index(persons: Sequence[JsonObject]) -> dict[str, str]:
         person_id = ref_id(person.get("id"))
         if not person_id:
             continue
+        embedded = person.get("_embedded")
         for field in ("duties", "dutyAssignments", "assignments"):
-            for duty in as_list(person.get(field)):
+            values = list(as_list(person.get(field)))
+            if isinstance(embedded, dict):
+                values.extend(as_list(embedded.get(field)))
+            for duty in values:
                 duty_id = ref_id(duty)
                 if duty_id:
                     index[duty_id] = person_id
     return index
-

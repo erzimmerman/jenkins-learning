@@ -90,9 +90,9 @@ def request_collection(
         response = session.get(
             url,
             headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
-            # Only add the original query on page one. A pagination URL returned
-            # by the API is already complete and must not receive duplicates.
-            params=query_params if page == 1 else None,
+            # Expansion parameters must accompany every page. Some SS12000
+            # pagination links only contain the cursor/page information.
+            params=query_params,
             timeout=120,
         )
         response.raise_for_status()
