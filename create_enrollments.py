@@ -9,7 +9,6 @@ from typing import Any
 
 from ss12000_common import (
     as_list,
-    duty_to_person_index,
     extract_collection,
     first_value,
     load_json,
@@ -92,66 +91,42 @@ def membership_role(person: dict[str, Any]) -> str:
 
 def embedded_groups(activity: dict[str, Any]) -> list[dict[str, Any]]:
     embedded = activity.get("_embedded")
-    if isinstance(embedded, dict):
-        groups = embedded.get("groups")
-        if isinstance(groups, list):
-            return [group for group in groups if isinstance(group, dict)]
-
-    # Kept as a fallback for SS12000 implementations returning expanded groups
-    # directly on the activity instead of below _embedded.
-    groups = activity.get("groups")
+    if not isinstance(embedded, dict):
+        return []
+    groups = embedded.get("groups")
     if isinstance(groups, list):
         return [group for group in groups if isinstance(group, dict)]
+    if isinstance(groups, dict):
+        for key in ("groups", "data", "items", "content", "results"):
+            values = groups.get(key)
+            if isinstance(values, list):
+                return [group for group in values if isinstance(group, dict)]
+        if ref_id(groups.get("id")):
+            return [groups]
     return []
 
 
-def activity_teacher_person_ids(
-    activity: dict[str, Any],
-    duty_persons: dict[str, str],
-) -> list[str]:
-    """Return the union of teacher persons referenced by an activity.
-
-    SS12000 can expose teachers as expanded records in ``_embedded.teachers``
-    and as duty references in the activity's top-level ``teachers`` list. The
-    latter can be resolved either against the expanded records or, when an API
-    page was not expanded, against Persons._embedded.duties.
-    """
-    expanded_teachers: list[dict[str, Any]] = []
+def embedded_teacher_person_ids(activity: dict[str, Any]) -> list[str]:
+    """Return one person id per entry in Activity._embedded.teachers."""
     embedded = activity.get("_embedded")
-    if isinstance(embedded, dict):
-        teachers = embedded.get("teachers")
-        if isinstance(teachers, list):
-            expanded_teachers = [
-                teacher for teacher in teachers if isinstance(teacher, dict)
-            ]
-
-    expanded_duties = {
-        duty_id: person_id
-        for teacher in expanded_teachers
-        if (duty_id := ref_id(teacher.get("id") or teacher.get("duty")))
-        if (person_id := ref_id(teacher.get("person")))
-    }
-
-    person_ids: list[str] = []
-    for teacher in expanded_teachers:
+    if not isinstance(embedded, dict):
+        return []
+    teachers = embedded.get("teachers")
+    if not isinstance(teachers, list):
+        return []
+    result: list[str] = []
+    for position, teacher in enumerate(teachers, start=1):
+        if not isinstance(teacher, dict):
+            continue
         person_id = ref_id(teacher.get("person"))
-        if person_id:
-            person_ids.append(person_id)
-
-    teachers = activity.get("teachers")
-    if isinstance(teachers, list):
-        for teacher in teachers:
-            if not isinstance(teacher, dict):
-                continue
-            person_id = ref_id(teacher.get("person"))
-            if not person_id:
-                duty_id = ref_id(teacher.get("duty") or teacher.get("id"))
-                person_id = expanded_duties.get(duty_id) or duty_persons.get(duty_id)
-            if person_id:
-                person_ids.append(person_id)
-
-    # Preserve source order while preventing duplicate teacher enrollments.
-    return list(dict.fromkeys(person_ids))
+        if not person_id:
+            course_id = ref_id(activity.get("id"))
+            raise ValueError(
+                f"Missing person.id for Activity {course_id!r} "
+                f"_embedded.teachers entry {position}"
+            )
+        result.append(person_id)
+    return result
 
 
 def enrollment_status(end_date: Any) -> str:
@@ -218,13 +193,14 @@ def rows(
 ) -> list[dict[str, str]]:
     user_ids = person_user_ids(persons)
     persons_by_id = person_index(persons)
-    duty_persons = duty_to_person_index(persons)
     persons_with_duties = sum(has_duties(person) for person in persons_by_id.values())
     print(
         f"Persons lookup contains {len(persons_by_id)} persons; "
         f"{persons_with_duties} have _embedded.duties information."
     )
     generated: list[dict[str, str]] = []
+    membership_rows = 0
+    embedded_teacher_rows = 0
 
     for activity in activities:
         base = base_row(activity)
@@ -255,12 +231,12 @@ def rows(
                     "role": membership_role(person),
                     "section_id": section_id,
                 })
+                membership_rows += 1
 
-        # Teachers in _embedded.teachers apply to the activity, while section_id
-        # requires a group. Create one teacher enrollment for every group in
-        # the activity. An exact duplicate is removed below if the same teacher
-        # is also present in that group's groupMemberships.
-        teacher_person_ids = activity_teacher_person_ids(activity, duty_persons)
+        # Each teacher occurrence in _embedded.teachers creates one row per
+        # expanded group. No deduplication is performed: the definition treats
+        # groupMemberships and _embedded.teachers as separate row sources.
+        teacher_person_ids = embedded_teacher_person_ids(activity)
         if teacher_person_ids and not group_ids:
             raise ValueError(
                 f"Activity {base['course_id']!r} has teachers but no expanded group id "
@@ -279,16 +255,13 @@ def rows(
                     "role": "teacher",
                     "section_id": section_id_for(base["course_id"], group_id),
                 })
+                embedded_teacher_rows += 1
 
-    unique: list[dict[str, str]] = []
-    seen: set[tuple[str, ...]] = set()
-    for row in generated:
-        identity = tuple(row[column] for column in COLUMNS)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        unique.append(row)
-    return unique
+    print(
+        f"Enrollment source rows: {membership_rows} from groupMemberships; "
+        f"{embedded_teacher_rows} from _embedded.teachers."
+    )
+    return generated
 
 
 def write_enrollments(path: Path, enrollment_rows: list[dict[str, str]]) -> int:
