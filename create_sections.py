@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ss12000_common import as_list, extract_collection, load_json, ref_id, text
+from ss12000_common import extract_collection, load_json, ref_id, text
 
 
 COLUMNS = [
@@ -29,55 +29,27 @@ def arguments() -> argparse.Namespace:
 
 
 def expanded_groups(activity: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every group below Activity._embedded.groups.
+
+    sections.csv is defined by the expanded group collection itself. The
+    activity's top-level ``groups`` references must not limit which expanded
+    groups are traversed.
+    """
     embedded = activity.get("_embedded")
     if not isinstance(embedded, dict):
         return []
     groups = embedded.get("groups")
-    if not isinstance(groups, list):
-        return []
-    return [group for group in groups if isinstance(group, dict)]
-
-
-def group_pairs(
-    activity: dict[str, Any],
-) -> list[tuple[str, dict[str, Any]]]:
-    """Pair each top-level groups.id with its expanded group details."""
-    expanded = expanded_groups(activity)
-    expanded_by_id = {
-        ref_id(group.get("id")): group
-        for group in expanded
-        if ref_id(group.get("id"))
-    }
-
-    references = [
-        reference
-        for reference in as_list(activity.get("groups"))
-        if isinstance(reference, dict)
-    ]
-
-    # The real API normally has references at Activity.groups and details at
-    # Activity._embedded.groups. Keep an embedded-only fallback for exports
-    # where the reference list has been omitted.
-    if not references:
-        return [
-            (ref_id(group.get("id")), group)
-            for group in expanded
-            if ref_id(group.get("id"))
-        ]
-
-    pairs: list[tuple[str, dict[str, Any]]] = []
-    for reference in references:
-        section_id = ref_id(reference.get("id"))
-        if not section_id:
-            raise ValueError("An Activity.groups reference is missing id")
-        group = expanded_by_id.get(section_id)
-        if group is None:
-            raise ValueError(
-                f"Group {section_id!r} is referenced by Activity.groups but is "
-                "missing from Activity._embedded.groups"
-            )
-        pairs.append((section_id, group))
-    return pairs
+    if isinstance(groups, list):
+        return [group for group in groups if isinstance(group, dict)]
+    # Compatibility with APIs wrapping the expanded collection once more.
+    if isinstance(groups, dict):
+        for key in ("groups", "data", "items", "content", "results"):
+            values = groups.get(key)
+            if isinstance(values, list):
+                return [group for group in values if isinstance(group, dict)]
+        if ref_id(groups.get("id")):
+            return [groups]
+    return []
 
 
 def rows(activities: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -91,15 +63,20 @@ def rows(activities: list[dict[str, Any]]) -> list[dict[str, str]]:
         start_date = text(activity.get("startDate"))
         end_date = text(activity.get("endDate"))
 
-        for section_id, group in group_pairs(activity):
+        for group in expanded_groups(activity):
+            group_id = ref_id(group.get("id"))
+            if not group_id:
+                raise ValueError(
+                    f"Activity {course_id!r} has an expanded group without id"
+                )
             name = text(group.get("displayName"))
             if not name:
                 raise ValueError(
-                    f"Expanded group {section_id!r} has no displayName"
+                    f"Expanded group {group_id!r} has no displayName"
                 )
             generated.append(
                 {
-                    "section_id": f"{course_id}_{section_id}",
+                    "section_id": f"{course_id}_{group_id}",
                     "course_id": course_id,
                     "name": name,
                     "status": "active",
@@ -139,7 +116,10 @@ def main() -> int:
                 "to sections"
             )
         count = write_sections(Path(args.output), section_rows)
-        print(f"Created {args.output} with {count} rows.")
+        print(
+            f"Created {args.output} with {count} rows from "
+            f"{len(activities)} activities."
+        )
         return 0
     except Exception as exc:
         print(f"Could not create sections CSV: {exc}", file=sys.stderr)
